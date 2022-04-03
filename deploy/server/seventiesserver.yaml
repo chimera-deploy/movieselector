@@ -73,6 +73,50 @@ Resources:
           - Name: EgressIgnoredIPs
             Value: '169.254.170.2,169.254.169.254'
       ContainerDefinitions:
+        - Name: otel-collector
+          Image: public.ecr.aws/aws-observability/aws-otel-collector:latest
+          Essential: true
+          User: '1337'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::ImportValue: !Sub "${ProjectName}:CWLogGroup"
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Sub 'seventiesserver-${Version}'
+          PortMappings:
+            - ContainerPort: 8125
+              Protocol: udp
+          Environment:
+            - Name: AOT_CONFIG_CONTENT
+              Value: !Sub |
+                extensions:
+                  health_check:
+                receivers:
+                  statsd:
+                    endpoint: 0.0.0.0:8125
+                    aggregation_interval: 60s
+                processors:
+                  batch/metrics:
+                    timeout: 60s
+                  filter:
+                    metrics:
+                      include:
+                        match_type: regexp
+                        metric_names:
+                          - ^envoy\.appmesh\..+$
+                exporters:
+                  awsemf:
+                    namespace: ${ProjectName}
+                    log_group_name: chimera-log-group
+                    dimension_rollup_option: NoDimensionRollup
+                service:
+                  pipelines:
+                    metrics:
+                      receivers: [statsd]
+                      processors: [batch/metrics, filter]
+                      exporters: [awsemf]
+                  extensions:  [health_check]
         - Name: envoy
           Image: !Ref EnvoyImage
           Essential: true
@@ -102,14 +146,16 @@ Resources:
                 Fn::ImportValue: !Sub '${ProjectName}:CWLogGroup'
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: !Sub 'seventiesserver-${Version}'
-          #DockerLabels:
-          #  ECS_PROMETHEUS_METRICS_PATH: /stats/prometheus
-          #  ECS_PROMETHEUS_EXPORTER_PORT: 9901
+          DockerLabels:
+            ECS_PROMETHEUS_METRICS_PATH: /stats/prometheus
+            ECS_PROMETHEUS_EXPORTER_PORT: 9901
           Environment:
             - Name: ENVOY_LOG_LEVEL
               Value: debug
-            #- Name: APPMESH_METRIC_EXTENSION_VERSION
-            #  Value: 1
+            - Name: ENABLE_ENVOY_DOG_STATSD
+              Value: 1
+            - Name: APPMESH_METRIC_EXTENSION_VERSION
+              Value: 1
             - Name: APPMESH_RESOURCE_ARN
               Value: !Ref SeventiesServerVirtualNode
         - Name: app
